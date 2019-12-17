@@ -1,0 +1,232 @@
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+```{r}
+### Code for "Democratization and Economic Output in Sub-Saharan Africa"
+### Daniel De Kadt and Stephen B. Wittels
+
+## A note to users:
+## Use setwd() to set the working directory to the location where data files are saved. 
+## Figures are programmed to be saved automatically to the working directory.
+## They are named according to their figure number in the paper.
+## The three tables in the paper are saved as the objects "mali.weights," "panel.estimates," and
+## "moderators." Code to print these objects to the console is included at the end.
+
+
+## Options and Libraries
+options(scipen = 6, digits = 3)
+
+# Install necessary libraries
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(foreign, 
+  Synth, 
+  xtable, 
+  rgenoud, 
+  reshape2, 
+  quadprog, 
+  ucminf, 
+  Rcgmin, 
+  Rvmmin, 
+  minqa, 
+  Rcpp, 
+  ggplot2, 
+  plyr, 
+  grid, 
+  lme4,
+  janitor,
+  dplyr,
+  CausalImpact  # For use in the extension
+)
+
+```
+
+
+```{r}
+## Data
+load("afripanel_wdk_final.RData")
+a <- read.csv("conditioning_variables1.csv")
+panel.reg <- read.dta("panel.reg1.dta")
+
+not_any_na <- function(x) all(!is.na(x))
+```
+
+## Replication
+
+```{r}
+# Replication function
+replicate <- function(
+  unitID,
+  fullname,
+  begin,
+  end,
+  tr2,
+  final,
+  low,
+  high
+){
+  
+  data <- afripanel[afripanel$WBCode==unitID | afripanel$cont_dem_ind==1,]
+  
+  controls <- unique(data$WBCode[data$WBCode!=unitID&data$WBCode!="ETH"&data$WBCode!="SDN"])
+  
+  prep <- dataprep(
+    foo=data, 
+    predictors=c(
+      "lngdpmadlag",
+      "lngdpmadlag2",
+      "lngdpmadlag3",
+      "lngdpmadlag4",
+      "lnpop",
+      "ki",
+      "openk",
+      "civwar",
+      "civwarend",
+      "pwt_xrate",
+      "pwt_xrate_lag1",
+      "pwt_xrate_lag2",
+      "pwt_xrate_lag3",
+      "eximdiff",
+      "eximdiff_lag1",
+      "eximdiff_lag2"
+    ),
+    dependent="lngdpmad",
+    unit.variable="wbcode2",
+    time.variable="year", 
+    treatment.identifier=unitID, 
+    controls.identifier=controls,          
+    time.predictors.prior=c(begin:end),
+    time.optimize.ssr=c(begin:tr2),
+    time.plot=c(begin:final),
+    unit.names.variable="WBCode"
+  )
+  
+  out <- synth(prep)
+  
+  path.plot(synth.res=out, dataprep.res=prep,
+            Ylab="Log GDP per capita", Legend=c(fullname, "Synthetic Counterfactual"), tr.intake=tr2,
+            Ylim=c(low,high) , Main=fullname
+  )
+  
+}
+```
+
+
+
+```{r}
+## Figure 2 Replication
+replicate("MLI", "Mali", 1980, 1990, 1991, 2008, 6, 8)  
+```
+```{r}
+## Figure 2 Replication in-time placebo
+replicate("MLI", "Mali", 1980, 1985, 1986, 2008, 6, 8)
+```
+```{r}
+## Figure 2 Replication in-space placebo
+replicate("BFA", "Burkina Faso", 1980, 1990, 1991, 2008, 6, 8)  
+```
+```{r}
+## Figure 2 Replication in-space placebo
+replicate("TCD", "Chad", 1980, 1990, 1991, 2008, 6, 8)  
+```
+```{r}
+## Figure 2 Replication in-space placebo
+replicate("NGA", "Nigeria", 1980, 1990, 1991, 2008, 6, 8)  
+```
+```{r}
+## Figure 2 Replication in-space placebo
+replicate("BDI", "Burundi", 1980, 1990, 1991, 2008, 6, 8)  
+```
+```{r}
+## Figure 2 Replication in-space placebo
+replicate("TGO", "Togo", 1980, 1990, 1991, 2008, 6, 8)  
+```
+
+## Extensions
+
+### Google Extension (CausalImpact)
+```{r}
+# Replication function from Google Extension
+show_impact_n <- function(
+  Country,
+  begin,
+  end,
+  treatYear
+){
+  data <- afripanel[which(afripanel$Country == Country), ]
+  predictors=c(
+      "lngdpmadlag",
+      "lngdpmadlag2",
+      "lngdpmadlag3",
+      "lngdpmadlag4",
+      "lnpop",
+      "ki",
+      "openk",
+      "civwar",
+      "civwarend",
+      "pwt_xrate",
+      "pwt_xrate_lag1",
+      "pwt_xrate_lag2",
+      "pwt_xrate_lag3",
+      "eximdiff",
+      "eximdiff_lag1",
+      "eximdiff_lag2",
+      "wbank",
+      "wbank_lag1",
+      "wbank_lag2"
+  )
+
+  outcome <- 'lngdpmad'
+  time.points <- as.Date(as.character(data$year), "%Y")
+  
+  data <- data[, c(outcome, predictors)]
+  data<-data[!is.na(data[outcome]),]
+  data <- data %>% select_if(not_any_na)
+  
+  
+  data <- zoo(data, time.points)
+  data <- data[index(data) > as.Date(begin, '%Y') & index(data) < as.Date(end, '%Y')]
+  
+  nextYear <- as.Date(as.character(as.numeric(treatYear) + 1), "%Y")
+  treatYear <- as.Date(treatYear, "%Y")
+  
+  start_date <- start(data)
+  end_date <- end(data)
+  
+  pre.period <- as.Date(c(start_date, treatYear))
+  post.period <- as.Date(c(nextYear, end_date))
+  
+  impact <- CausalImpact(data, 
+                          pre.period, 
+                          post.period,
+                          model.args = list(
+                            niter = 1000, 
+                            nseasons = 52)
+                          )
+  return(impact)
+}
+```
+# Graphs:
+```{r}
+impact <- show_impact_n('Mali', '1980', '2005', '1990')
+plot(impact) + ggtitle ("Causal Impact on Mali beyond 1991")
+```
+```{r}
+impact <- show_impact_n('Mali', '1980', '2005', '1985')
+plot(impact) + ggtitle("Causal Impact on Mali beyond 1985")
+```
+```{r}
+impact <- show_impact_n('Burkina Faso', '1980', '2005', '1990')
+plot(impact) + ggtitle("Causal Impact on Burkina Faso beyond 1990")
+```
+```{r}
+impact <- show_impact_n('Mali', '1980', '2005', '1985')
+plot(impact) + ggtitle("In-time placebo (Mali)")
+```
+```{r}
+impact <- show_impact_n('Burkina Faso', '1980', '2005', '1990')
+plot(impact) + ggtitle("In-space placebo (Burkina Faso)")
+```
